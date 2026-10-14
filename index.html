@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
 
@@ -47,19 +48,27 @@
     #reader {
       width: 100%;
       margin-top: 20px;
+      overflow: hidden;
+      border-radius: 10px;
     }
 
-    #status {
+    #result {
       margin-top: 20px;
-      padding: 15px;
-      border-radius: 8px;
+      padding: 20px;
+      border-radius: 10px;
       display: none;
       font-size: 18px;
+      line-height: 1.5;
     }
 
     .success {
       background: #d4edda;
       color: #155724;
+    }
+
+    .warning {
+      background: #fff3cd;
+      color: #856404;
     }
 
     .error {
@@ -88,6 +97,16 @@
       opacity: 0.6;
       cursor: not-allowed;
     }
+
+    #scanAgainButton {
+      display: none;
+    }
+
+    .qr-value {
+      font-size: 22px;
+      font-weight: bold;
+      margin-top: 8px;
+    }
   </style>
 </head>
 
@@ -109,32 +128,63 @@
 
   <div id="reader"></div>
 
-  <div id="status"></div>
+  <div id="result"></div>
+
+  <button
+    id="scanAgainButton"
+    onclick="scanAgain()">
+    Scan Next QR
+  </button>
 
 </div>
 
+
 <script>
 
+  /*
+   * IMPORTANT:
+   * Replace this with your Apps Script /exec URL.
+   */
+  const API_URL =
+    "https://script.google.com/macros/s/AKfycbzMNJOdrAkGASx7QqLW15CSVYMYCmXYMyOEUWh_eVfPMEMnJFX7CJbmU9dRE0Sqeg46/exec";
+
+
   let html5QrCode = null;
+
   let processing = false;
+
+  let scannerStarted = false;
 
 
   async function startScanner() {
 
-    const button =
+    const startButton =
       document.getElementById("startButton");
 
-    button.disabled = true;
+    const scanAgainButton =
+      document.getElementById("scanAgainButton");
 
-    showStatus(
-      "Starting camera...",
-      "info"
-    );
+    const result =
+      document.getElementById("result");
+
+
+    startButton.disabled = true;
+
+    scanAgainButton.style.display = "none";
+
+    result.style.display = "none";
+
+    processing = false;
+
 
     try {
 
-      html5QrCode =
-        new Html5Qrcode("reader");
+      if (!html5QrCode) {
+
+        html5QrCode =
+          new Html5Qrcode("reader");
+
+      }
 
 
       await html5QrCode.start(
@@ -155,26 +205,30 @@
         onScanSuccess,
 
         function() {
-          // Ignore normal scan failures.
+          // Normal scanning errors are ignored.
         }
       );
 
 
-      showStatus(
-        "Camera ready. Point it at a QR code.",
-        "info"
-      );
+      scannerStarted = true;
+
+      startButton.style.display = "none";
+
 
     } catch (error) {
 
-      console.error(error);
-
-      showStatus(
-        "Unable to start camera: " + error,
-        "error"
+      console.error(
+        "Camera error:",
+        error
       );
 
-      button.disabled = false;
+      showResult(
+        "error",
+        "<strong>✕ Unable to start camera</strong><br><br>" +
+        escapeHtml(String(error))
+      );
+
+      startButton.disabled = false;
     }
   }
 
@@ -185,70 +239,293 @@
       return;
     }
 
+
     processing = true;
+
+
+    const qrValue =
+      String(decodedText).trim();
+
 
     console.log(
       "QR detected:",
-      decodedText
-    );
-
-
-    showStatus(
-      "QR detected: " + decodedText,
-      "success"
+      qrValue
     );
 
 
     /*
-     * TEMPORARY:
-     *
-     * For this first test we are ONLY checking
-     * whether live camera scanning works.
-     *
-     * We are NOT connecting to Google Sheets yet.
+     * Pause scanner immediately so the same QR
+     * cannot be submitted multiple times.
      */
+    try {
+
+      html5QrCode.pause(true);
+
+    } catch (error) {
+
+      console.log(
+        "Pause error:",
+        error
+      );
+    }
+
+
+    showResult(
+      "info",
+      "<strong>Checking QR...</strong>" +
+      "<div class='qr-value'>" +
+      escapeHtml(qrValue) +
+      "</div>"
+    );
+
+
+    await checkQr(qrValue);
+  }
+
+
+  async function checkQr(qrValue) {
+
+    try {
+
+      const requestUrl =
+        API_URL +
+        "?qr=" +
+        encodeURIComponent(qrValue);
+
+
+      const response =
+        await fetch(
+          requestUrl,
+          {
+            method: "GET",
+            redirect: "follow"
+          }
+        );
+
+
+      if (!response.ok) {
+
+        throw new Error(
+          "Server returned HTTP " +
+          response.status
+        );
+      }
+
+
+      const data =
+        await response.json();
+
+
+      handleApiResponse(data);
+
+
+    } catch (error) {
+
+      console.error(
+        "API error:",
+        error
+      );
+
+
+      showResult(
+        "error",
+        "<strong>✕ Connection Error</strong><br><br>" +
+        "Unable to check this QR.<br>" +
+        escapeHtml(error.message || String(error))
+      );
+
+
+      showScanAgainButton();
+    }
+  }
+
+
+  function handleApiResponse(data) {
+
+    if (data.type === "LOGGED") {
+
+      showResult(
+        "success",
+
+        "<strong style='font-size:24px'>" +
+        "✓ Successfully Logged" +
+        "</strong>" +
+
+        "<div class='qr-value'>" +
+        escapeHtml(data.qr) +
+        "</div>" +
+
+        "<br>" +
+
+        "Time: " +
+        escapeHtml(data.date)
+      );
+
+    }
+
+
+    else if (
+      data.type === "ALREADY_LOGGED"
+    ) {
+
+      showResult(
+        "warning",
+
+        "<strong style='font-size:24px'>" +
+        "⚠ Already Logged" +
+        "</strong>" +
+
+        "<div class='qr-value'>" +
+        escapeHtml(data.qr) +
+        "</div>" +
+
+        "<br>" +
+
+        "Previously logged:<br>" +
+
+        escapeHtml(
+          data.date || "-"
+        )
+      );
+
+    }
+
+
+    else if (
+      data.type === "INVALID"
+    ) {
+
+      showResult(
+        "error",
+
+        "<strong style='font-size:24px'>" +
+        "✕ Invalid QR Code" +
+        "</strong>" +
+
+        "<br><br>" +
+
+        "QR: " +
+        escapeHtml(
+          data.qr || ""
+        ) +
+
+        "<br><br>" +
+
+        "This QR is not registered."
+      );
+
+    }
+
+
+    else {
+
+      showResult(
+        "error",
+
+        "<strong>✕ Error</strong>" +
+
+        "<br><br>" +
+
+        escapeHtml(
+          data.message ||
+          "Unknown server response."
+        )
+      );
+
+    }
+
+
+    showScanAgainButton();
+  }
+
+
+  function showScanAgainButton() {
+
+    document
+      .getElementById("scanAgainButton")
+      .style.display = "block";
+  }
+
+
+  function scanAgain() {
+
+    const result =
+      document.getElementById("result");
+
+    const button =
+      document.getElementById(
+        "scanAgainButton"
+      );
+
+
+    result.style.display = "none";
+
+    button.style.display = "none";
+
+    processing = false;
 
 
     try {
 
-      await html5QrCode.pause();
+      html5QrCode.resume();
 
     } catch (error) {
 
-      console.log(error);
+      console.error(
+        "Resume error:",
+        error
+      );
+
+
+      /*
+       * If resume fails, restart scanner.
+       */
+
+      scannerStarted = false;
+
+      document
+        .getElementById("startButton")
+        .style.display = "block";
+
+      document
+        .getElementById("startButton")
+        .disabled = false;
     }
-
-
-    setTimeout(function() {
-
-      processing = false;
-
-      try {
-
-        html5QrCode.resume();
-
-      } catch (error) {
-
-        console.log(error);
-      }
-
-    }, 3000);
   }
 
 
-  function showStatus(message, type) {
+  function showResult(
+    type,
+    html
+  ) {
 
-    const status =
-      document.getElementById("status");
+    const result =
+      document.getElementById("result");
 
-    status.style.display = "block";
 
-    status.className = type;
+    result.style.display = "block";
 
-    status.textContent = message;
+    result.className = type;
+
+    result.innerHTML = html;
+  }
+
+
+  function escapeHtml(value) {
+
+    const div =
+      document.createElement("div");
+
+    div.textContent =
+      value == null
+        ? ""
+        : String(value);
+
+    return div.innerHTML;
   }
 
 </script>
 
 </body>
+
 </html>
